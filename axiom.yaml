@@ -1,0 +1,163 @@
+name: christiangeorgelucas/shell-tools
+version: 0.1.0
+language: typescript
+description: >-
+  Deterministic PARSING and safe CONSTRUCTION of POSIX shell command-line
+  strings — this package never executes, spawns, or touches a shell; every
+  node is a pure text-in/text-or-structure-out transform. Wraps shell-quote
+  (MIT, zero runtime dependencies), the reference JS library for POSIX
+  command-line tokenizing and escaping. Tokenize a full command line into
+  its ordered argument/operator stream; extract just the plain-text argv;
+  split a command line into pipeline stages (on `|`) or sequential commands
+  (on `;`/`&&`/`||`/`&`, preserving the joining operator); extract I/O
+  redirections (`>`, `>>`, `<`, `2>&1`, ...) as structured data; extract
+  leading `NAME=value` environment-variable assignments and the command
+  name that follows them; quote/escape an argument list — or a single
+  argument — into a safe POSIX command string that cannot be broken out of
+  by embedded spaces, quotes, `$(...)`, backticks, `;`, or newlines; and
+  detect whether a value needs quoting at all. `$(...)`, `${...}`, `$VAR`,
+  and backtick command/parameter substitution are NEVER interpreted or
+  expanded anywhere in this package — every parsing node pre-protects these
+  constructs as opaque literal text before tokenizing (shell-quote's own
+  parser does not do this by default: unprotected, it silently decomposes
+  `$(...)` into stray operator tokens and can shred backtick spans across
+  word boundaries — this package closes both gaps). All input is
+  length-bounded, and malformed input (unterminated quotes, unmatched
+  parens, unterminated substitutions) returns a structured error rather
+  than crashing or silently mis-parsing.
+license: MIT
+author: Christian George Lucas
+tags:
+  - shell
+  - posix
+  - command-line
+  - parsing
+  - quoting
+  - escaping
+  - shell-quote
+  - argv
+  - injection-safety
+  - tokenizer
+nodes:
+    - name: ParseCommandLine
+      input: ParseCommandLineRequest
+      output: ParseCommandLineResult
+      description: >-
+        Parse a full POSIX-style command-line string into its ordered token
+        stream: plain-text argument words, and control operators (|, ||,
+        &&, ;, ;;, &, (, ), <, >, >>, <<, <<<, >&, <&, |&, <() as
+        structured tokens with is_operator=true. The most general node in
+        the package — imposes no structure and never rejects a supported
+        operator. `$(...)`, `${...}`, `$VAR`, and backtick substitution are
+        preserved as literal, unevaluated text inside whatever word they
+        appear in, never expanded and never allowed to fragment into
+        spurious operator tokens. Malformed input (unterminated quote,
+        unmatched parenthesis, unterminated substitution) returns a
+        structured error instead of throwing or silently mis-tokenizing.
+    - name: ExtractArgv
+      input: ExtractArgvRequest
+      output: ExtractArgvResult
+      description: >-
+        Extract just the plain-text argument words from a command line,
+        dropping every control operator (pipes, sequencers, redirections,
+        parens). Redirection targets and env-assignment right-hand sides
+        are ordinary words to this node and are NOT filtered out — use
+        ExtractRedirections / ExtractEnvAssignments for a semantics-aware
+        view. `$(...)`/`${...}`/backtick constructs inside a word are
+        preserved verbatim, never evaluated.
+    - name: QuoteArgv
+      input: QuoteArgvRequest
+      output: QuoteArgvResult
+      description: >-
+        Quote/escape a list of argument strings into a single safe POSIX
+        command-line string, so that no argument's content — however
+        adversarial (embedded spaces, quotes, `$(...)`, backticks, `;`,
+        newlines) — can be reinterpreted as anything other than that
+        argument's literal value when the result is later parsed as a
+        POSIX command line. Empty-array input produces an empty string;
+        an empty-string argument is quoted as `''`.
+    - name: EscapeArg
+      input: EscapeArgRequest
+      output: EscapeArgResult
+      description: >-
+        Escape a SINGLE argument string for safe inclusion in a POSIX
+        shell command line — equivalent to QuoteArgv on a one-element
+        list, exposed separately because escaping one value at a time is
+        the more common call shape when assembling a command
+        incrementally. A value that needs no escaping is returned
+        unchanged (consistent with DetectShellMetacharacters.needs_quoting).
+    - name: SplitPipeline
+      input: SplitPipelineRequest
+      output: SplitPipelineResult
+      description: >-
+        Split a command line into its pipeline stages: the segments
+        between top-level `|` operators (not `||`). Each stage keeps its
+        own full token stream, so a stage-local redirection (e.g.
+        `cmd 2>&1`) is preserved rather than discarded. Scope: a single
+        flat pipeline only — a top-level sequencer (`;`, `&&`, `||`, `&`)
+        or a subshell/grouping paren is reported as a structured error;
+        split with SplitSequential first and apply SplitPipeline to each
+        resulting command.
+    - name: SplitSequential
+      input: SplitSequentialRequest
+      output: SplitSequentialResult
+      description: >-
+        Split a command line into sequential commands on top-level `;`,
+        `&&`, `||`, or `&`, preserving which operator joined each command
+        to the one before it (empty string for the first command). A `|`
+        inside one command is preserved as part of that command's own
+        tokens — a single sequential command may itself be a pipeline; only
+        the four sequencer operators are split points. Scope: a top-level
+        subshell/grouping paren is reported as a structured error (no
+        nested-group support).
+    - name: ExtractRedirections
+      input: ExtractRedirectionsRequest
+      output: ExtractRedirectionsResult
+      description: >-
+        Extract every I/O redirection from a command line as structured
+        data, in the order they appear: source file descriptor (when a
+        bare digit immediately precedes the operator, e.g. the "2" in
+        "2>&1"; empty otherwise), the operator itself (>, >>, <, <<, <<<,
+        >&, <&), and the target word that follows it.
+    - name: DetectShellMetacharacters
+      input: DetectShellMetacharactersRequest
+      output: DetectShellMetacharactersResult
+      description: >-
+        Injection-risk check for a single candidate argument value: is it
+        safe to interpolate raw into a POSIX command line as one
+        whitespace-delimited word, or does it need quoting first?
+        needs_quoting is defined consistently with EscapeArg: it is true
+        if and only if EscapeArg would change the value. metacharacters_found
+        lists the distinct shell-special characters actually present
+        (whitespace, quotes, $, backtick, ;, |, &, (, ), <, >, and other
+        POSIX-special punctuation) — empty when needs_quoting is false.
+    - name: ExtractEnvAssignments
+      input: ExtractEnvAssignmentsRequest
+      output: ExtractEnvAssignmentsResult
+      description: >-
+        Extract the leading environment-variable assignments that prefix a
+        command (POSIX `FOO=bar BAZ=qux mycommand arg1` syntax): each
+        `NAME=value` pair, and the remaining plain-text argument words of
+        the command that follows them (operators dropped, same convention
+        as ExtractArgv). A command line with no leading assignments returns
+        an empty assignments list and the full argv in remaining_argv.
+    - name: ExtractCommandName
+      input: ExtractCommandNameRequest
+      output: ExtractCommandNameResult
+      description: >-
+        Extract the leading command/executable name from a command line,
+        after skipping any leading `NAME=value` environment-variable
+        assignments. Returns a structured error (command empty) when the
+        line is empty, malformed, or contains only env-var assignments
+        with no command after them.
+    - name: IsOperatorToken
+      input: IsOperatorTokenRequest
+      output: IsOperatorTokenResult
+      description: >-
+        Classify a single token's literal text: is it recognized as a
+        POSIX shell control operator (exact match against | || && ; ;; &
+        > >> < << <<< >& <& |& ( ) <(), or is it an ordinary literal word?
+        Answers whether an exact token — such as one produced by
+        ParseCommandLine, SplitPipeline, or SplitSequential — is itself an
+        operator; it does not scan an arbitrary string for embedded
+        metacharacters (see DetectShellMetacharacters for that).

@@ -1,0 +1,231 @@
+// This file defines the data contracts (messages) for your Axiom package.
+// Every node's --input and --output refers to a message defined here.
+//
+// Run `axiom create message <Name>` to scaffold a new message below.
+// Run `axiom generate` to compile these definitions into language bindings in gen/.
+//
+// DOCUMENTATION
+//   Comments written directly above a message or field declaration are extracted
+//   automatically at publish time and shown in the Axiom registry as documentation.
+//   Write your descriptions there — no separate doc files needed.
+//
+//   Leading comment  (no blank line before the declaration) → registry description ✓
+//   Detached comment (blank line before the declaration)    → ignored by registry  ✗
+//
+// This file is yours to edit. Axiom only appends new message blocks — it never
+// overwrites or removes content you have written.
+
+syntax = "proto3";
+
+package christiangeorgelucas.shell_tools;
+
+// A single lexical unit of a parsed POSIX command-line string: either a
+// plain word/argument (is_operator=false) or a shell control operator such
+// as a pipe, sequencer, redirection, or grouping paren (is_operator=true).
+// `text` is always the literal surface text — for an operator it's the
+// operator symbol itself (e.g. "|", "&&", ">>"); for a word it is the
+// word's DECODED value (quotes removed, backslash-escapes resolved) with
+// any `$(...)`, `${...}`, `$VAR`, or `` `...` `` construct preserved
+// EXACTLY as written in the input — this package never evaluates,
+// expands, or substitutes those constructs.
+message Token {
+  string text = 1;
+  bool is_operator = 2;
+}
+
+// Parse a full POSIX-style command-line string into its ordered token
+// stream: arguments as plain-text tokens, and control operators (|, ||,
+// &&, ;, ;;, &, (, ), <, >, >>, <<, <<<, >&, <&, |&, <() as structured
+// operator tokens. This is the most general node in the package — it
+// never executes, evaluates, or expands anything, and it never restricts
+// which operators may appear (unlike SplitPipeline/SplitSequential, which
+// impose a specific structure).
+message ParseCommandLineRequest {
+  string command_line = 1;
+}
+
+message ParseCommandLineResult {
+  repeated Token tokens = 1;
+  // Non-empty on malformed input (unterminated quote, unmatched
+  // parenthesis, unterminated $(...)/${...}/` command/parameter
+  // substitution). tokens is always empty when error is set.
+  string error = 2;
+}
+
+// Extract just the plain-text argument words from a command line,
+// dropping every control operator (pipes, sequencers, redirections,
+// parens). This is the "just give me the words" convenience view —
+// redirection targets and env-assignment right-hand sides are NOT
+// filtered out (they are ordinary words to this node); use
+// ExtractRedirections / ExtractEnvAssignments for a semantics-aware view.
+message ExtractArgvRequest {
+  string command_line = 1;
+}
+
+message ExtractArgvResult {
+  repeated string argv = 1;
+  string error = 2;
+}
+
+// Quote/escape a list of argument strings into a single, safe POSIX
+// command-line string: joining them with the shell's own word-splitting
+// rules so that no argument's content — however adversarial (embedded
+// spaces, quotes, `$(...)`, backticks, `;`, newlines) — can be
+// reinterpreted as anything other than that argument's literal value when
+// the result is later parsed as a POSIX command line.
+message QuoteArgvRequest {
+  repeated string argv = 1;
+}
+
+message QuoteArgvResult {
+  string command_line = 1;
+  string error = 2;
+}
+
+// Escape a SINGLE argument string for safe inclusion in a POSIX shell
+// command line. Equivalent to QuoteArgv with a one-element list, exposed
+// as its own node because escaping one value at a time is the more common
+// call shape for agents assembling a command incrementally.
+message EscapeArgRequest {
+  string value = 1;
+}
+
+message EscapeArgResult {
+  string escaped = 1;
+  string error = 2;
+}
+
+// Split a command line into its pipeline stages: the segments between
+// top-level `|` operators (NOT `||`). Scope: a single flat pipeline only —
+// if the input contains a sequencer (`;`, `&&`, `||`, `&`) or a
+// subshell/grouping paren at the top level, that is reported as a
+// structured error (split the input with SplitSequential first, and
+// apply SplitPipeline to each resulting command).
+message SplitPipelineRequest {
+  string command_line = 1;
+}
+
+// One stage of a pipeline: its full token stream (so redirections local
+// to that stage, e.g. `cmd 2>&1`, are preserved rather than discarded).
+message PipelineStage {
+  repeated Token tokens = 1;
+}
+
+message SplitPipelineResult {
+  repeated PipelineStage stages = 1;
+  string error = 2;
+}
+
+// One command in a sequence, together with the operator that joined it to
+// the PREVIOUS command (empty string for the first command in the line).
+message SequentialCommand {
+  repeated Token tokens = 1;
+  string joiner = 2;
+}
+
+// Split a command line into sequential commands on top-level `;`, `&&`,
+// `||`, or `&`, preserving which operator joined each pair. A `|` within
+// one command is preserved as part of that command's own tokens (a single
+// sequential command may itself be a pipeline) — only the four sequencer
+// operators are split points. Scope: a subshell/grouping paren at the top
+// level is reported as a structured error (no nested-group support).
+message SplitSequentialRequest {
+  string command_line = 1;
+}
+
+message SplitSequentialResult {
+  repeated SequentialCommand commands = 1;
+  string error = 2;
+}
+
+// One I/O redirection extracted from a command line: `fd` is the source
+// file descriptor when one immediately precedes the operator (e.g. the
+// "2" in "2>&1"; empty when none is present, meaning the shell default
+// for that operator), `operator` is one of > >> < << <<< >& <&, and
+// `target` is the word immediately following the operator (a filename, or
+// another fd for the `>&`/`<&` duplication operators).
+message Redirection {
+  string fd = 1;
+  string operator = 2;
+  string target = 3;
+}
+
+// Extract every I/O redirection from a command line as structured data,
+// in the order they appear.
+message ExtractRedirectionsRequest {
+  string command_line = 1;
+}
+
+message ExtractRedirectionsResult {
+  repeated Redirection redirections = 1;
+  string error = 2;
+}
+
+// Injection-risk / "does this need quoting" check for a single candidate
+// argument value: is it safe to interpolate raw into a POSIX command line
+// as one whitespace-delimited word, or does it require quoting/escaping
+// first? Defined consistently with EscapeArg/QuoteArgv: needs_quoting is
+// true if and only if EscapeArg would change the value (i.e. the value
+// does NOT already round-trip as itself through the escaper).
+message DetectShellMetacharactersRequest {
+  string value = 1;
+}
+
+message DetectShellMetacharactersResult {
+  bool needs_quoting = 1;
+  // The distinct set of shell-special characters found in value (e.g.
+  // whitespace, quotes, "$", "`", ";", "|", "&", "(", ")", "<", ">",
+  // glob/bracket/brace characters). Empty when needs_quoting is false.
+  repeated string metacharacters_found = 2;
+  string error = 3;
+}
+
+// One `NAME=value` assignment found prefixing a command line.
+message EnvAssignment {
+  string name = 1;
+  string value = 2;
+}
+
+// Extract the leading environment-variable assignments that prefix a
+// command (POSIX `FOO=bar BAZ=qux mycommand arg1` syntax) — the
+// assignments themselves, and the remaining plain-text argument words of
+// the command that follows them (operators dropped, same convention as
+// ExtractArgv).
+message ExtractEnvAssignmentsRequest {
+  string command_line = 1;
+}
+
+message ExtractEnvAssignmentsResult {
+  repeated EnvAssignment assignments = 1;
+  repeated string remaining_argv = 2;
+  string error = 3;
+}
+
+// Extract the leading command/executable name from a command line, after
+// skipping any leading `NAME=value` environment-variable assignments.
+message ExtractCommandNameRequest {
+  string command_line = 1;
+}
+
+message ExtractCommandNameResult {
+  string command = 1;
+  // Set (with command empty) when command_line is empty, contains only
+  // env-var assignments with no command after them, or is malformed.
+  string error = 2;
+}
+
+// Classify a single token's literal text: is it recognized as a POSIX
+// shell control operator (exact match against the fixed operator
+// vocabulary: | || && ; ;; & > >> < << <<< >& <& |& ( ) <( ), or is it an
+// ordinary literal word? This does NOT scan an arbitrary string for
+// embedded metacharacters (see DetectShellMetacharacters for that) — it
+// answers whether this exact token, as produced by ParseCommandLine /
+// SplitPipeline / SplitSequential, is itself an operator.
+message IsOperatorTokenRequest {
+  string token = 1;
+}
+
+message IsOperatorTokenResult {
+  bool is_operator = 1;
+  string error = 2;
+}
