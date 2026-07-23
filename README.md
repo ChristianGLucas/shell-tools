@@ -1,7 +1,7 @@
 # shell-tools
 
 Deterministic **parsing** and safe **construction** of POSIX shell
-command-line strings, built for the [Axiom](https://axiom.co) marketplace
+command-line strings, built for the [Axiom](https://axiomide.com) marketplace
 under the `christiangeorgelucas` handle.
 
 **This package never executes, spawns, or touches a shell.** Every node is a
