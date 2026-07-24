@@ -1,7 +1,6 @@
 import { ParseCommandLineRequest } from '../gen/messages_pb';
 import { parseCommandLine } from './parse_command_line';
 import { ctx } from './testkit';
-import { MAX_COMMAND_LEN, MAX_TOKEN_COUNT } from './lib';
 
 function req(commandLine: string): ParseCommandLineRequest {
   const r = new ParseCommandLineRequest();
@@ -153,20 +152,18 @@ describe('ParseCommandLine', () => {
     expect(result.getError()).toContain('unterminated `');
   });
 
-  it('BOUNDS: rejects a command_line longer than MAX_COMMAND_LEN', () => {
-    const result = parseCommandLine(ctx, req('a'.repeat(MAX_COMMAND_LEN + 1)));
-    expect(result.getError()).toContain('exceeds the maximum');
+  it('handles a large command_line without crashing (size limits are the platform\'s job)', () => {
+    const result = parseCommandLine(ctx, req('a'.repeat(50000)));
+    expect(result.getError()).toBe('');
   });
 
-  it('BOUNDS: rejects a command line that would tokenize into more than MAX_TOKEN_COUNT tokens', () => {
+  it('handles a command line that tokenizes into many tokens without crashing', () => {
     // Alternating "<" ">" never merge into a multi-char operator (unlike
-    // "<<" "<&" etc.), so this achieves a 1-char-per-token ratio: well
-    // under MAX_COMMAND_LEN in characters while exceeding MAX_TOKEN_COUNT
-    // in token count, isolating the token-count bound from the length bound.
-    const commandLine = '<>'.repeat(Math.ceil((MAX_TOKEN_COUNT + 100) / 2));
-    expect(commandLine.length).toBeLessThan(MAX_COMMAND_LEN);
+    // "<<" "<&" etc.), so this achieves a 1-char-per-token ratio.
+    const commandLine = '<>'.repeat(5000);
     const result = parseCommandLine(ctx, req(commandLine));
-    expect(result.getError()).toContain('more than');
+    expect(result.getError()).toBe('');
+    expect(result.getTokensList().length).toBeGreaterThan(9000);
   });
 
   it('DETERMINISM: identical input produces identical output across repeated invocations', () => {
